@@ -1,49 +1,75 @@
 #lang racket
-(define (enclosing-environment env) (mcdr env))
-(define (first-frame env) (mcar env))
+(provide enclosing-environment
+         first-frame
+         the-empty-environment
+         make-frame
+         add-binding-to-frame!
+         extend-environment
+         lookup-variable-value
+         set-variable-value!
+         define-variable-value!)
+(define (enclosing-environment env) (cdr env))
+(define (first-frame env) (car env))
 (define the-empty-environment '())
 
 (define (make-frame variables values)
-  (mcons variables values))
-(define (frame-variables frame) (mcar frame))
-(define (frame-values frame) (mcdr frame))
+  (let ((var-val-pairs (foldl (lambda (var val pairs) (cons (cons var val) pairs))
+                              '()
+                              variables
+                              values)))
+    (make-hash var-val-pairs)))
 (define (add-binding-to-frame! var val frame)
-  (set-mcar! frame (mcons var (mcar frame)))
-  (set-mcdr! frame (mcons val (mcdr frame))))
+  (hash-set! frame var val))
 
 (define (extend-environment vars vals base-env)
-  (if (= (length vars) (length vals))
-      (mcons (make-frame vars vals) base-env)
-      (if (< (length vars) (length vals))
-          (error "More values than variables" vars vals)
-          (error "More variables than values" vars vals))))
+  (cons (make-frame vars vals) base-env))
 
 (define (lookup-variable-value var env)
   (define (env-loop env)
-    (define (scan vars vals)
-      (cond
-        ((null? vars) (env-loop (enclosing-environment env)))
-        ((eq? var (mcar vars)) (mcar vals))
-        (else (scan (mcdr vars) (mcdr vals)))))
     (if (eq? env the-empty-environment)
         (error "Unbound variable" var)
-        (let ((frame (first-frame env)))
-          (scan (frame-variables frame)
-                (frame-values frame)))))
+        #|see if the first frame in the environment contains a binding for the relevant
+        variable; if not, tail call env-loop on the rest of the environment.
+        Note that the weird hack of wrapping the call to env-loop in a lambda of no arguments is needed
+        because, while hash-ref does allow tail-calling a procedure instead of returning a value when
+        the given key has no associated value in the given hash table, it only allows procedures of no arguments.
+        |#
+        (hash-ref (first-frame env) var (lambda ()
+                                          (env-loop (cdr env))))))
   (env-loop env))
 
 (define (set-variable-value! var val env)
   (define (env-loop env)
-    (define (scan vars vals)
-      (cond
-        ((null? vars) (env-loop (enclosing-environment env)))
-        ((eq? var (mcar vars)) (set-mcar! vals val))
-        (else (scan (mcdr vars) (mcdr vals)))))
-    (if (eq? env the-empty-environment)
-        (error "Unbound variable-- SET!" var)
-        (let ((frame (first-frame env)))
-          (scan (frame-variables frame)
-                (frame-values frame)))))
+    (cond
+      ((eq? env the-empty-environment) (error "Unbound variable--SET" var))
+      ((hash-has-key? (first-frame env) var) (hash-set! (first-frame env) var val))
+      (else (env-loop (cdr env)))))
   (env-loop env))
-(define test-env (make-frame '(a b) '(1 2))))
+
+(define (define-variable-value! var val env)
+  ;holds onto the first frame in the given environment--it will be needed if no binding for val already exists.
+  (let ((original-first-frame (car env)))
+    (define (env-loop env)
+      (cond
+        ((eq? env the-empty-environment) (hash-set! original-first-frame var val))
+        ((hash-has-key? (first-frame env) var) (hash-set! (first-frame env) var val))
+        (else (env-loop (cdr env)))))
+    (env-loop env)))
+    
+
+(define test-env (list
+                  (make-frame '(square) (list (lambda (x) (* x x))))
+                  (make-frame '(a b) '(1 2))
+                  (make-frame '(a c) '(3 4))))
+
 (lookup-variable-value 'a test-env)
+(lookup-variable-value 'b test-env)
+(lookup-variable-value 'c test-env)
+(set-variable-value! 'a 5 test-env)
+(lookup-variable-value 'a test-env)
+;(lookup-variable-value 'd test-env)
+;((lookup-variable-value 'square test-env) 5)
+(define-variable-value! 'a 2 test-env)
+(lookup-variable-value 'a test-env)
+(define-variable-value! 'd 6 test-env)
+(lookup-variable-value 'd test-env)
